@@ -57,6 +57,18 @@ export const Plugin = define({
                 Object.assign(provider.request.headers, item.request.headers)
                 Object.assign(provider.request.body, item.request.body)
               }
+              // Multi-account: carry accounts + switching strategy into the
+              // provider's api.settings so the model runner can resolve the
+              // active API key per request.
+              if (item.accounts !== undefined || item.accountSwitchingStrategy !== undefined) {
+                provider.api.settings = {
+                  ...provider.api.settings,
+                  ...(item.accounts !== undefined ? { accounts: item.accounts } : {}),
+                  ...(item.accountSwitchingStrategy !== undefined
+                    ? { accountSwitchingStrategy: item.accountSwitchingStrategy }
+                    : {}),
+                }
+              }
             })
             for (const [id, config] of Object.entries(item.models ?? {})) {
               catalog.model.update(providerID, id, (model) => {

@@ -70,4 +70,23 @@ export interface ProviderConfig {
   npm?: string
   env?: string[]
   options?: Record<string, unknown>
+  /** Multiple named API-key accounts for providers that support BYOK auth. */
+  accounts?: ProviderAccount[]
+  /** How the active account is chosen: manually, on error / credits exhausted, or round robin. */
+  accountSwitchingStrategy?: AccountSwitchStrategy
 }
+
+/**
+ * A single named account (API key) for a provider. A provider may have several
+ * accounts; exactly one is active at a time and the switching strategy decides
+ * when to fall back to or rotate between them.
+ */
+export interface ProviderAccount {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl?: string
+  isActive: boolean
+}
+
+export type AccountSwitchStrategy = "manual" | "onError" | "roundRobin"

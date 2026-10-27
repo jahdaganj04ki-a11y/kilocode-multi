@@ -14,6 +14,7 @@ import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
+import type { AccountSwitchStrategy, ProviderAccount } from "../../v1/config/provider"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -80,11 +81,31 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 /** Test or embedding seam for supplying a model resolver directly. */
 export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
 
+// Tracks the next round-robin index per provider. Kept in memory only;
+// resets on process restart, which is acceptable for a selection strategy.
+const roundRobinIndex = new Map<string, number>()
+
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (credential?.type === "key") return Auth.value(credential.key)
   if (credential?.type === "oauth") return Auth.value(credential.access)
-  const value = model.request.body.apiKey ?? model.api.settings?.apiKey
-  if (typeof value === "string") return Auth.value(value)
+
+  const accounts = model.api.settings?.accounts as ProviderAccount[] | undefined
+  const strategy = model.api.settings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
+  const fallbackValue = model.request.body.apiKey ?? model.api.settings?.apiKey
+
+  if (accounts && accounts.length > 0) {
+    if (strategy === "roundRobin") {
+      const key = model.providerID
+      const idx = (roundRobinIndex.get(key) ?? 0) % accounts.length
+      roundRobinIndex.set(key, idx + 1)
+      return Auth.value(accounts[idx].apiKey)
+    }
+    // manual or onError: use the active account
+    const active = accounts.find((a) => a.isActive)
+    if (active) return Auth.value(active.apiKey)
+  }
+
+  if (typeof fallbackValue === "string") return Auth.value(fallbackValue)
 }
 
 const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {

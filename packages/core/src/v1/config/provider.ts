@@ -6,6 +6,16 @@ import { PositiveInt } from "../../schema"
 
 export const ModelStatus = Schema.Literals(["alpha", "beta", "deprecated", "active"])
 
+export type AccountSwitchStrategy = "manual" | "onError" | "roundRobin"
+
+export interface ProviderAccount {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl?: string
+  isActive: boolean
+}
+
 const InterleavedField = Schema.Union([
   Schema.Literals(["reasoning", "reasoning_content", "reasoning_text"]),
   Schema.String,
@@ -95,40 +105,58 @@ export const Info = Schema.Struct({
   whitelist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   blacklist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   options: Schema.optional(
-    Schema.StructWithRest(
-      Schema.Struct({
-        apiKey: Schema.optional(Schema.String),
-        baseURL: Schema.optional(Schema.String),
-        enterpriseUrl: Schema.optional(Schema.String).annotate({
-          description: "GitHub Enterprise URL for copilot authentication",
-        }),
-        setCacheKey: Schema.optional(Schema.Boolean).annotate({
-          description: "Enable promptCacheKey for this provider (default false)",
-        }),
-        timeout: Schema.optional(
-          Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
+      Schema.StructWithRest(
+        Schema.Struct({
+          apiKey: Schema.optional(Schema.String),
+          baseURL: Schema.optional(Schema.String),
+          enterpriseUrl: Schema.optional(Schema.String).annotate({
+            description: "GitHub Enterprise URL for copilot authentication",
+          }),
+          setCacheKey: Schema.optional(Schema.Boolean).annotate({
+            description: "Enable promptCacheKey for this provider (default false)",
+          }),
+          timeout: Schema.optional(
+            Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
+              description: "Timeout in milliseconds for full requests to this provider. Set to false to disable timeout.",
+            }),
+          ).annotate({
             description: "Timeout in milliseconds for full requests to this provider. Set to false to disable timeout.",
           }),
-        ).annotate({
-          description: "Timeout in milliseconds for full requests to this provider. Set to false to disable timeout.",
-        }),
-        headerTimeout: Schema.optional(
-          Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
+          headerTimeout: Schema.optional(
+            Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
+              description:
+                "Timeout in milliseconds to wait for response headers. Provider integrations may set defaults. Set to false to disable timeout.",
+            }),
+          ).annotate({
             description:
               "Timeout in milliseconds to wait for response headers. Provider integrations may set defaults. Set to false to disable timeout.",
           }),
-        ).annotate({
-          description:
-            "Timeout in milliseconds to wait for response headers. Provider integrations may set defaults. Set to false to disable timeout.",
+          chunkTimeout: Schema.optional(PositiveInt).annotate({
+            description:
+              "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
+          }),
         }),
-        chunkTimeout: Schema.optional(PositiveInt).annotate({
-          description:
-            "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
-        }),
-      }),
       [Schema.Record(Schema.String, Schema.Any)],
     ),
   ),
+  accounts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        name: Schema.String,
+        apiKey: Schema.String,
+        baseUrl: Schema.optional(Schema.String),
+        isActive: Schema.Boolean,
+      }),
+    ),
+  ).annotate({
+    description: "Multiple named API-key accounts for providers that support BYOK auth.",
+  }),
+  accountSwitchingStrategy: Schema.optional(
+    Schema.Literals(["manual", "onError", "roundRobin"]),
+  ).annotate({
+    description: "How the active account is chosen: manually, on error / credits exhausted, or round robin.",
+  }),
   models: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Model))), // kilocode_change - allow null values so removed models can be deleted via stripNulls on save
 }).annotate({ identifier: "ProviderConfig" })
 export type Info = Schema.Schema.Type<typeof Info>
