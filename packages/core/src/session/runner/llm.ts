@@ -423,7 +423,7 @@ const layer = Layer.effect(
       )
     })
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
         Effect.catchDefect((defect) => {
           if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
@@ -437,7 +437,7 @@ const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
       return yield* runTurnWithFailover(sessionID, promotion, step, 5).pipe(
         Effect.catchDefect((defect) => {
           if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
