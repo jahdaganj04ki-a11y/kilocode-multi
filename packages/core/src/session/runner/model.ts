@@ -308,7 +308,7 @@ export const locationLayer = Layer.effect(
           connection ? yield* integrations.connection.resolve(connection) : undefined,
         )
       }),
-    }),
+    })
   }),
 )
 
