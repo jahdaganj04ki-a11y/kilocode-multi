@@ -68,4 +68,19 @@ export class Info extends Schema.Class<Info>("ConfigV2.Provider")({
   api: ProviderV2.Api.pipe(Schema.optional),
   request: Request.pipe(Schema.optional),
   models: Schema.Record(Schema.String, Model).pipe(Schema.optional),
+  // Multi-account: named API-key accounts for providers that support BYOK auth.
+  accounts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        name: Schema.String,
+        apiKey: Schema.String,
+        baseUrl: Schema.optional(Schema.String),
+        isActive: Schema.Boolean,
+      }),
+    ),
+  ),
+  accountSwitchingStrategy: Schema.optional(
+    Schema.Literals(["manual", "onError", "roundRobin"]),
+  ),
 }) {}
