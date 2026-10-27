@@ -14,6 +14,7 @@ import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
+import type { AccountSwitchStrategy, ProviderAccount } from "../../v1/config/provider"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -80,11 +81,77 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 /** Test or embedding seam for supplying a model resolver directly. */
 export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
 
+// Tracks the next round-robin index per provider. Kept in memory only;
+// resets on process restart, which is acceptable for a selection strategy.
+const roundRobinIndex = new Map<string, number>()
+
+// Tracks API keys that have failed (e.g. 401 / credits exhausted) per provider,
+// used by the "onError" switching strategy. Kept in memory only.
+const failedAccountKeys = new Map<string, Set<string>>()
+
+// Tracks the last API key used per provider, so llm.ts can mark it as failed
+// on an auth error and trigger a failover retry.
+const lastUsedKeyPerProvider = new Map<string, string>()
+
+/** Mark an API key as failed for a provider so onError skips it next time. */
+export function markAccountKeyFailed(providerID: string, apiKey: string) {
+  let set = failedAccountKeys.get(providerID)
+  if (!set) {
+    set = new Set()
+    failedAccountKeys.set(providerID, set)
+  }
+  set.add(apiKey)
+}
+
+/** Reset the failed-key tracking for a provider (all accounts have failed). */
+export function resetFailedAccountKeys(providerID: string) {
+  failedAccountKeys.delete(providerID)
+}
+
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (credential?.type === "key") return Auth.value(credential.key)
   if (credential?.type === "oauth") return Auth.value(credential.access)
-  const value = model.request.body.apiKey ?? model.api.settings?.apiKey
-  if (typeof value === "string") return Auth.value(value)
+
+  const accounts = model.api.settings?.accounts as ProviderAccount[] | undefined
+  const strategy = model.api.settings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
+  const fallbackValue = model.request.body.apiKey ?? model.api.settings?.apiKey
+
+  if (accounts && accounts.length > 0) {
+    const failed = failedAccountKeys.get(model.providerID)
+
+    if (strategy === "manual") {
+      // Manual: user explicitly chose the active account, do not auto-skip
+      const active = accounts.find((a) => a.isActive)
+      if (active) {
+        lastUsedKeyPerProvider.set(model.providerID, active.apiKey)
+        return Auth.value(active.apiKey)
+      }
+    } else {
+      // onError or roundRobin: skip keys that have failed
+      const available = accounts.filter((a) => !failed?.has(a.apiKey))
+      const effective = failed && available.length === 0 ? accounts : available
+
+      if (strategy === "roundRobin") {
+        const key = model.providerID
+        const idx = (roundRobinIndex.get(key) ?? 0) % effective.length
+        roundRobinIndex.set(key, idx + 1)
+        const selected = effective[idx]
+        lastUsedKeyPerProvider.set(model.providerID, selected.apiKey)
+        return Auth.value(selected.apiKey)
+      }
+      // onError: use the active account, or first available
+      const active = effective.find((a) => a.isActive) ?? effective[0]
+      lastUsedKeyPerProvider.set(model.providerID, active.apiKey)
+      return Auth.value(active.apiKey)
+    }
+  }
+
+  if (typeof fallbackValue === "string") return Auth.value(fallbackValue)
+}
+
+/** Returns the last API key used for a provider, or undefined. */
+export function getLastUsedKey(providerID: string): string | undefined {
+  return lastUsedKeyPerProvider.get(providerID)
 }
 
 const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {

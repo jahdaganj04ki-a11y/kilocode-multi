@@ -15,6 +15,7 @@ import { useServer } from "../../context/server"
 import { useVSCode } from "../../context/vscode"
 import type { Provider } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
+import ProviderAccountDialog from "./ProviderAccountDialog"
 import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
 import {
@@ -27,7 +28,6 @@ import {
   sortProviders,
 } from "./provider-catalog"
 import {
-  canChangeProviderKey,
   disabledProviderOptions,
   providersWithKiloFallback,
   visibleConnectedIds,
@@ -133,6 +133,12 @@ const ProvidersTab: Component = () => {
         },
       },
     )
+  }
+
+  function manageAccounts(item: Provider) {
+    // API-key based (non-environment) providers can have multiple named accounts.
+    if (!canDisconnect(item)) return
+    dialog.show(() => <ProviderAccountDialog providerID={item.id} />)
   }
 
   function disableProvider(providerID: string) {
@@ -270,7 +276,17 @@ const ProvidersTab: Component = () => {
                   "border-bottom": "1px solid var(--border-weak-base)",
                 }}
               >
-                <div style={{ display: "flex", "align-items": "center", gap: "12px", "min-width": 0 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    "align-items": "center",
+                    gap: "12px",
+                    "min-width": 0,
+                    cursor: canDisconnect(item) ? "pointer" : "default",
+                  }}
+                  onClick={() => manageAccounts(item)}
+                  title={language.t("settings.providers.accounts.title", { provider: item.name })}
+                >
                   <ProviderIcon id={providerIcon(item)} width={20} height={20} />
                   <span
                     style={{
@@ -308,15 +324,11 @@ const ProvidersTab: Component = () => {
                       {language.t("provider.anaconda.action.manage")}
                     </Button>
                   </Show>
-                  <Show when={canDisconnect(item)}>
-                    <Show
-                      when={canChangeProviderKey(item, config().provider?.[item.id], provider.authMethods()[item.id])}
-                    >
-                      <Button size="large" variant="ghost" onClick={() => connectProvider(item)}>
-                        {language.t("settings.providers.action.changeApiKey")}
+                    <Show when={canDisconnect(item)}>
+                      <Button size="large" variant="ghost" onClick={() => manageAccounts(item)}>
+                        {language.t("settings.providers.action.manageAccounts")}
                       </Button>
-                    </Show>
-                    <Show when={isCustom(item)}>
+                      <Show when={isCustom(item)}>
                       <Button size="large" variant="ghost" onClick={() => editProvider(item)}>
                         {language.t("provider.custom.edit.title")}
                       </Button>
