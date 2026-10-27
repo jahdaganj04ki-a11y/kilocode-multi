@@ -32,7 +32,7 @@ import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
-import { SessionRunnerModel, markAccountKeyFailed, getLastUsedKey } from "./model"
+import { SessionRunnerModel, markAccountKeyFailed, getLastUsedKey, getProviderAccountSettings } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
@@ -272,16 +272,14 @@ const layer = Layer.effect(
                 return
               }
               // onError failover: mark the used account as failed and retry
-              const settings = model.api.settings as
-                | { accountSwitchingStrategy?: string }
-                | undefined
+              const settings = getProviderAccountSettings(model.provider)
               if (
                 settings?.accountSwitchingStrategy === "onError" &&
                 isAuthError(event)
               ) {
                 const lastKey = getLastUsedKey(model.provider)
                 if (lastKey) markAccountKeyFailed(model.provider, lastKey)
-                yield* Effect.die(new AuthFailoverError())
+                yield* Effect.fail(new AuthFailoverError())
                 return
               }
             }
@@ -419,13 +417,9 @@ const layer = Layer.effect(
     const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow)
         .pipe(
-          Effect.catchDefect(function* (defect) {
-            if (defect instanceof AuthFailoverError) return yield* Effect.fail(defect)
-            return yield* Effect.die(defect)
-          }),
           Effect.retry({
             times: 5,
-            while: (error, _) => error instanceof AuthFailoverError,
+            while: (error) => error instanceof AuthFailoverError,
           }),
         )
         .pipe(
