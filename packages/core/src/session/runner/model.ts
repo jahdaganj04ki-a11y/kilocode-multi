@@ -14,6 +14,7 @@ import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
+import type { AccountSwitchStrategy, ProviderAccount } from "../../v1/config/provider"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -296,10 +297,13 @@ export const locationLayer = Layer.effect(
           provider?.integrationID ?? Integration.ID.make(selected.providerID),
         )
         // Cache account settings so llm.ts can read them without accessing ModelV2.Info.api.settings
-        if (provider.api.settings?.accounts || provider.api.settings?.accountSwitchingStrategy) {
+        const providerSettings = provider.api.settings as
+          | { accounts?: ProviderAccount[]; accountSwitchingStrategy?: AccountSwitchStrategy }
+          | undefined
+        if (providerSettings?.accounts || providerSettings?.accountSwitchingStrategy) {
           providerAccountSettings.set(selected.providerID, {
-            accounts: provider.api.settings.accounts,
-            accountSwitchingStrategy: provider.api.settings.accountSwitchingStrategy,
+            accounts: providerSettings.accounts,
+            accountSwitchingStrategy: providerSettings.accountSwitchingStrategy,
           })
         }
         return yield* resolve(

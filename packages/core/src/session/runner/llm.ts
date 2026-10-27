@@ -409,7 +409,7 @@ const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       retriesLeft: number,
-    ) {
+    ): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(function* (defect) {
           if (defect instanceof AuthFailoverError && retriesLeft > 0) {
