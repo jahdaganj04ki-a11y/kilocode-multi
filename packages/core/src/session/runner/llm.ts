@@ -262,6 +262,7 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      let shouldFailover = false
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -271,15 +272,12 @@ const layer = Layer.effect(
                 overflowFailure = event
                 return
               }
-              // onError failover: mark the used account as failed and retry
+              // onError failover: mark the used account as failed and signal retry via flag
               const settings = getProviderAccountSettings(model.provider)
-              if (
-                settings?.accountSwitchingStrategy === "onError" &&
-                isAuthError(event)
-              ) {
+              if (settings?.accountSwitchingStrategy === "onError" && isAuthError(event)) {
                 const lastKey = getLastUsedKey(model.provider)
                 if (lastKey) markAccountKeyFailed(model.provider, lastKey)
-                yield* Effect.fail(new AuthFailoverError())
+                shouldFailover = true
                 return
               }
             }
@@ -324,6 +322,9 @@ const layer = Layer.effect(
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           // Auth failover: retry the turn with a different account
+          if (shouldFailover) {
+            return yield* Effect.fail(new AuthFailoverError())
+          }
           if (failure instanceof AuthFailoverError) {
             return yield* Effect.fail(failure)
           }
