@@ -411,43 +411,43 @@ const layer = Layer.effect(
       retriesLeft: number,
     ): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (defect instanceof AuthFailoverError && retriesLeft > 0) {
+        Effect.catchDefect((defect) => {
+          if (defect instanceof AuthFailoverError && retriesLeft > 0) {
+            return Effect.gen(function* () {
               yield* Effect.yieldNow
               return yield* runTurnWithFailover(sessionID, promotion, step, retriesLeft - 1)
-            }
-            return yield* Effect.die(defect)
-          }),
-        ),
+            })
+          }
+          return Effect.die(defect)
+        }),
       )
     })
 
     const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
-            if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
+        Effect.catchDefect((defect) => {
+          if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
+          if (defect.transition._tag === "ContinueAfterOverflowCompaction")
+            return Effect.die("Post-compaction provider attempt cannot recover another overflow")
+          return Effect.gen(function* () {
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-          }),
-        ),
+          })
+        }),
       )
     })
 
     const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnWithFailover(sessionID, promotion, step, 5).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
+        Effect.catchDefect((defect) => {
+          if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
+          return Effect.gen(function* () {
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
             return yield* runTurn(sessionID, undefined, defect.transition.step)
-          }),
-        ),
+          })
+        }),
       )
     })
 
