@@ -297,11 +297,13 @@ export const locationLayer = Layer.effect(
           provider?.integrationID ?? Integration.ID.make(selected.providerID),
         )
         // Cache account settings so llm.ts can read them without accessing ModelV2.Info.api.settings
-        const rawSettings = provider.api.settings as any
-        const accounts = rawSettings?.accounts as ProviderAccount[] | undefined
-        const strategy = rawSettings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
-        if (accounts || strategy) {
-          providerAccountSettings.set(selected.providerID, { accounts, accountSwitchingStrategy: strategy })
+        if (provider) {
+          const rawSettings = provider.api.settings as any
+          const accounts = rawSettings?.accounts as ProviderAccount[] | undefined
+          const strategy = rawSettings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
+          if (accounts || strategy) {
+            providerAccountSettings.set(selected.providerID, { accounts, accountSwitchingStrategy: strategy })
+          }
         }
         return yield* resolve(
           session,

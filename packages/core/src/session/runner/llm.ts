@@ -411,13 +411,15 @@ const layer = Layer.effect(
       retriesLeft: number,
     ): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
-        Effect.catchDefect(function* (defect) {
-          if (defect instanceof AuthFailoverError && retriesLeft > 0) {
-            yield* Effect.yieldNow
-            return yield* runTurnWithFailover(sessionID, promotion, step, retriesLeft - 1)
-          }
-          return yield* Effect.die(defect)
-        }),
+        Effect.catchDefect(
+          Effect.fnUntraced(function* (defect) {
+            if (defect instanceof AuthFailoverError && retriesLeft > 0) {
+              yield* Effect.yieldNow
+              return yield* runTurnWithFailover(sessionID, promotion, step, retriesLeft - 1)
+            }
+            return yield* Effect.die(defect)
+          }),
+        ),
       )
     })
 
