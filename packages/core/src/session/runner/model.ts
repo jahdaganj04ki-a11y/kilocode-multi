@@ -93,6 +93,14 @@ const failedAccountKeys = new Map<string, Set<string>>()
 // on an auth error and trigger a failover retry.
 const lastUsedKeyPerProvider = new Map<string, string>()
 
+// Tracks account settings (accounts + switching strategy) per provider,
+// populated from the catalog during model resolution so llm.ts can read them
+// without accessing ModelV2.Info.api.settings directly.
+const providerAccountSettings = new Map<string, {
+  accounts?: ProviderAccount[]
+  accountSwitchingStrategy?: AccountSwitchStrategy
+}>()
+
 /** Mark an API key as failed for a provider so onError skips it next time. */
 export function markAccountKeyFailed(providerID: string, apiKey: string) {
   let set = failedAccountKeys.get(providerID)
@@ -108,12 +116,18 @@ export function resetFailedAccountKeys(providerID: string) {
   failedAccountKeys.delete(providerID)
 }
 
+/** Returns the account settings for a provider, or undefined if none configured. */
+export function getProviderAccountSettings(providerID: string) {
+  return providerAccountSettings.get(providerID)
+}
+
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (credential?.type === "key") return Auth.value(credential.key)
   if (credential?.type === "oauth") return Auth.value(credential.access)
 
-  const accounts = model.api.settings?.accounts as ProviderAccount[] | undefined
-  const strategy = model.api.settings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
+  const settings = getProviderAccountSettings(model.providerID)
+  const accounts = settings?.accounts
+  const strategy = settings?.accountSwitchingStrategy
   const fallbackValue = model.request.body.apiKey ?? model.api.settings?.apiKey
 
   if (accounts && accounts.length > 0) {
@@ -282,6 +296,15 @@ export const locationLayer = Layer.effect(
         const connection = yield* integrations.connection.active(
           provider?.integrationID ?? Integration.ID.make(selected.providerID),
         )
+        // Cache account settings so llm.ts can read them without accessing ModelV2.Info.api.settings
+        if (provider) {
+          const rawSettings = provider.api.settings as any
+          const accounts = rawSettings?.accounts as ProviderAccount[] | undefined
+          const strategy = rawSettings?.accountSwitchingStrategy as AccountSwitchStrategy | undefined
+          if (accounts || strategy) {
+            providerAccountSettings.set(selected.providerID, { accounts, accountSwitchingStrategy: strategy })
+          }
+        }
         return yield* resolve(
           session,
           selected,

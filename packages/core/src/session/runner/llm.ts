@@ -32,7 +32,7 @@ import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
-import { SessionRunnerModel, markAccountKeyFailed, getLastUsedKey } from "./model"
+import { SessionRunnerModel, markAccountKeyFailed, getLastUsedKey, getProviderAccountSettings } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
@@ -262,6 +262,7 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      let shouldFailover = false
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -271,17 +272,12 @@ const layer = Layer.effect(
                 overflowFailure = event
                 return
               }
-              // onError failover: mark the used account as failed and retry
-              const settings = model.api.settings as
-                | { accountSwitchingStrategy?: string }
-                | undefined
-              if (
-                settings?.accountSwitchingStrategy === "onError" &&
-                isAuthError(event)
-              ) {
+              // onError failover: mark the used account as failed and signal retry via flag
+              const settings = getProviderAccountSettings(model.provider)
+              if (settings?.accountSwitchingStrategy === "onError" && isAuthError(event)) {
                 const lastKey = getLastUsedKey(model.provider)
                 if (lastKey) markAccountKeyFailed(model.provider, lastKey)
-                yield* Effect.die(new AuthFailoverError())
+                shouldFailover = true
                 return
               }
             }
@@ -326,6 +322,9 @@ const layer = Layer.effect(
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           // Auth failover: retry the turn with a different account
+          if (shouldFailover) {
+            return yield* Effect.fail(new AuthFailoverError())
+          }
           if (failure instanceof AuthFailoverError) {
             return yield* Effect.fail(failure)
           }
@@ -392,53 +391,64 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
-          return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
+          return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep } as { readonly needsContinuation: boolean; readonly step: number }
         }),
       )
     }, Effect.scoped)
+
     type RunTurn = (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
     ) => Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
-            if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
-            yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-          }),
-        ),
+    // Runs runTurnAttempt with account failover retries on AuthFailoverError.
+    // Each retry picks a different account (via providerAccountSettings in model.ts).
+    const runTurnWithFailover = Effect.fn("SessionRunner.runTurnWithFailover")(function* (
+      sessionID: SessionSchema.ID,
+      promotion: SessionInput.Delivery | undefined,
+      step: number,
+      retriesLeft: number,
+    ) {
+      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+        Effect.catchDefect((defect) => {
+          if (defect instanceof AuthFailoverError && retriesLeft > 0) {
+            return Effect.gen(function* () {
+              yield* Effect.yieldNow
+              return yield* runTurnWithFailover(sessionID, promotion, step, retriesLeft - 1)
+            })
+          }
+          return Effect.die(defect)
+        }),
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow)
-        .pipe(
-          Effect.catchDefect(function* (defect) {
-            if (defect instanceof AuthFailoverError) return yield* Effect.fail(defect)
-            return yield* Effect.die(defect)
-          }),
-          Effect.retry({
-            times: 5,
-            while: (error, _) => error instanceof AuthFailoverError,
-          }),
-        )
-        .pipe(
-          Effect.catchDefect(
-            Effect.fnUntraced(function* (defect) {
-              if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
-              yield* Effect.yieldNow
-              if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-                return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-              return yield* runTurn(sessionID, undefined, defect.transition.step)
-            }),
-          ),
-        )
+    const runAfterOverflowCompaction: RunTurn = Effect.fn("SessionRunner.runAfterOverflowCompaction")(function* (sessionID, promotion, step) {
+      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+        Effect.catchDefect((defect) => {
+          if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
+          if (defect.transition._tag === "ContinueAfterOverflowCompaction")
+            return Effect.die("Post-compaction provider attempt cannot recover another overflow")
+          return Effect.gen(function* () {
+            yield* Effect.yieldNow
+            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+          })
+        }),
+      )
+    })
+
+    const runTurn: RunTurn = Effect.fn("SessionRunner.runTurn")(function* (sessionID, promotion, step) {
+      return yield* runTurnWithFailover(sessionID, promotion, step, 5).pipe(
+        Effect.catchDefect((defect) => {
+          if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
+          return Effect.gen(function* () {
+            yield* Effect.yieldNow
+            if (defect.transition._tag === "ContinueAfterOverflowCompaction")
+              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+            return yield* runTurn(sessionID, undefined, defect.transition.step)
+          })
+        }),
+      )
     })
 
     const run = Effect.fn("SessionRunner.run")(function* (input: {
