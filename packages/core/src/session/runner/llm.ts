@@ -404,12 +404,12 @@ const layer = Layer.effect(
 
     // Runs runTurnAttempt with account failover retries on AuthFailoverError.
     // Each retry picks a different account (via providerAccountSettings in model.ts).
-    const runTurnWithFailover = Effect.fnUntraced(function* (
+    const runTurnWithFailover = Effect.fnUntraced<{ readonly needsContinuation: boolean; readonly step: number }, RunError, never>(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
       retriesLeft: number,
-    ): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
+    ) {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect((defect) => {
           if (defect instanceof AuthFailoverError && retriesLeft > 0) {
@@ -423,7 +423,7 @@ const layer = Layer.effect(
       )
     })
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced<{ readonly needsContinuation: boolean; readonly step: number }, RunError, never>(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
         Effect.catchDefect((defect) => {
           if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
@@ -437,7 +437,7 @@ const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step): Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError> {
+    const runTurn: RunTurn = Effect.fnUntraced<{ readonly needsContinuation: boolean; readonly step: number }, RunError, never>(function* (sessionID, promotion, step) {
       return yield* runTurnWithFailover(sessionID, promotion, step, 5).pipe(
         Effect.catchDefect((defect) => {
           if (!(defect instanceof TurnTransitionError)) return Effect.die(defect)
